@@ -1,0 +1,105 @@
+// Schema central de la PLATAFORMA MDD.
+// Persiste todo el pipeline: un Project agrupa las 6 etapas.
+// (PDF seccion 4 - Modelo de Datos)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // SQLite para cero-setup. Para usar PostgreSQL (como en el PDF):
+  //   provider = "postgresql"
+  //   url      = env("DATABASE_URL")  // postgresql://user:pass@localhost:5432/mdd
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id           String   @id @default(cuid())
+  name         String
+  userId       String   @default("single-user") // sin auth (scope del PDF)
+  currentStage Int      @default(1) // 1..6
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  messages RequirementMessage[]
+  cim      CIMModel?
+  pim      PIMModel?
+  psm      PSMModel?
+  code     GeneratedCode?
+  deployment Deployment?
+}
+
+model RequirementMessage {
+  id        String   @id @default(cuid())
+  projectId String
+  role      String // "user" | "assistant"
+  content   String
+  order     Int
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model CIMModel {
+  id         String    @id @default(cuid())
+  projectId  String    @unique
+  content    String // JSON: functional_requirements, non_functional_requirements, actors, use_cases
+  status     String    @default("pending") // pending | approved | rejected | generating
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model PIMModel {
+  id         String    @id @default(cuid())
+  projectId  String    @unique
+  content    String // JSON: entities[] con attributes y relations
+  status     String    @default("pending")
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model PSMModel {
+  id         String    @id @default(cuid())
+  projectId  String    @unique
+  content    String // JSON: por entidad -> prismaModel, endpoints, reactComponents
+  status     String    @default("pending")
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model GeneratedCode {
+  id         String    @id @default(cuid())
+  projectId  String    @unique
+  files      String // JSON: { "path/al/archivo": "contenido", ... }
+  status     String    @default("pending")
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Deployment {
+  id          String   @id @default(cuid())
+  projectId   String   @unique
+  status      String   @default("idle") // idle | building | running | failed
+  frontendUrl String?
+  backendUrl  String?
+  logs        String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}

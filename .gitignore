@@ -1,0 +1,9 @@
+node_modules
+.next
+.env
+*.db
+*.db-journal
+prisma/dev.db
+generated-apps
+next-env.d.ts
+.DS_Store
