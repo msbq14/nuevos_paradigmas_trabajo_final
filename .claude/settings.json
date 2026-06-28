@@ -44,7 +44,9 @@
       "Bash(cat prisma/.env)",
       "Bash(find . -path ./node_modules -prune -o -iname \"*pimToPsm*\" -print)",
       "Bash(find . -path ./node_modules -prune -o -iname \"*.test.*\" -print)",
-      "Bash(node --experimental-strip-types -e ' *)"
+      "Bash(node --experimental-strip-types -e ' *)",
+      "Bash(command -v sqlite3)",
+      "Bash(sqlite3 prisma/dev.db \"SELECT p.name, p.currentStage, d.status, c.status, pi.status, ps.status, gc.status FROM Project p LEFT JOIN Deployment d ON d.projectId=p.id LEFT JOIN CIMModel c ON c.projectId=p.id LEFT JOIN PIMModel pi ON pi.projectId=p.id LEFT JOIN PSMModel ps ON ps.projectId=p.id LEFT JOIN GeneratedCode gc ON gc.projectId=p.id;\")"
     ]
   }
 }

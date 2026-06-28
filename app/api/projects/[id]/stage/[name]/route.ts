@@ -40,7 +40,10 @@ export async function POST(
         if (typeof body.content !== "string") {
           return NextResponse.json({ error: "Falta 'content'." }, { status: 400 });
         }
-        await updateStageContent(name, id, body.content);
+        const result = await updateStageContent(name, id, body.content);
+        if (!result.ok) {
+          return NextResponse.json({ error: result.errors }, { status: 400 });
+        }
         return NextResponse.json({ ok: true });
       }
       default:

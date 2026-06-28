@@ -2,6 +2,7 @@
 
 import { prisma } from "./prisma";
 import { generateCIM, generatePIM, generatePSM, generateCode } from "./pipeline";
+import { validateModel, type ValidationResult } from "./validate";
 
 export type StageName = "cim" | "pim" | "psm" | "code";
 
@@ -62,19 +63,41 @@ export async function rejectStage(stage: StageName, projectId: string) {
   await setStatus(stage, projectId, "rejected", null);
 }
 
+/**
+ * Edita el contenido de una etapa. Para cim/pim/psm, revalida contra su
+ * metamodelo antes de guardar (PDF: "no saltarse la validacion del
+ * metamodelo antes de guardar en DB" aplica tambien a ediciones manuales).
+ */
 export async function updateStageContent(
   stage: StageName,
   projectId: string,
   content: string
-) {
+): Promise<ValidationResult> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    return { ok: false, errors: `JSON invalido: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  if (stage === "cim" || stage === "pim" || stage === "psm") {
+    const result = validateModel(stage, parsed);
+    if (!result.ok) return result;
+  }
+
   switch (stage) {
     case "cim":
-      return prisma.cIMModel.update({ where: { projectId }, data: { content } });
+      await prisma.cIMModel.update({ where: { projectId }, data: { content } });
+      break;
     case "pim":
-      return prisma.pIMModel.update({ where: { projectId }, data: { content } });
+      await prisma.pIMModel.update({ where: { projectId }, data: { content } });
+      break;
     case "psm":
-      return prisma.pSMModel.update({ where: { projectId }, data: { content } });
+      await prisma.pSMModel.update({ where: { projectId }, data: { content } });
+      break;
     case "code":
-      return prisma.generatedCode.update({ where: { projectId }, data: { files: content } });
+      await prisma.generatedCode.update({ where: { projectId }, data: { files: content } });
+      break;
   }
+  return { ok: true };
 }
