@@ -38,7 +38,13 @@
       "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X DELETE http://localhost:8477/libros/1)",
       "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\n\" http://localhost:8476/)",
       "Bash(curl -s http://localhost:8476/api/libros)",
-      "Bash(curl -s -o /dev/null -w \"puerto 3000: %{http_code}\\\\n\" http://localhost:3000)"
+      "Bash(curl -s -o /dev/null -w \"puerto 3000: %{http_code}\\\\n\" http://localhost:3000)",
+      "Bash(DATABASE_URL=file:./prisma/dev.db node -e ' *)",
+      "Bash(cat .env)",
+      "Bash(cat prisma/.env)",
+      "Bash(find . -path ./node_modules -prune -o -iname \"*pimToPsm*\" -print)",
+      "Bash(find . -path ./node_modules -prune -o -iname \"*.test.*\" -print)",
+      "Bash(node --experimental-strip-types -e ' *)"
     ]
   }
 }

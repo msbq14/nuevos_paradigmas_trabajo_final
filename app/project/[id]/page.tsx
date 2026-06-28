@@ -35,6 +35,12 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]["key"];
 
+const CHAT_EXAMPLES = [
+  "Quiero un sistema de biblioteca para gestionar libros, socios y préstamos.",
+  "Necesito una tienda online con catálogo de productos, carrito y pedidos.",
+  "Quiero gestionar tareas de un equipo, con proyectos y asignaciones.",
+];
+
 function StatusBadge({ status }: { status?: string }) {
   const map: Record<string, string> = {
     approved: "bg-green-100 text-green-800",
@@ -204,10 +210,18 @@ function ChatPanel({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 240) + "px";
+  }, [text]);
 
   async function send() {
     if (!text.trim()) return;
@@ -220,6 +234,7 @@ function ChatPanel({
     setText("");
     setSending(false);
     onReload();
+    textareaRef.current?.focus();
   }
 
   return (
@@ -228,42 +243,64 @@ function ChatPanel({
         Describe el sistema que necesitas. DeepSeek actúa como analista de requisitos y hace
         preguntas hasta tener todo claro. Luego pulsa <b>Finalizar y formalizar</b>.
       </p>
-      <div className="h-80 overflow-y-auto border rounded p-3 bg-gray-50 space-y-2">
-        {messages.length === 0 && (
-          <p className="text-gray-400 text-sm">
-            Empieza, por ejemplo: &quot;Quiero un sistema de biblioteca para gestionar libros y
-            préstamos&quot;.
-          </p>
-        )}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`text-sm p-2 rounded max-w-[85%] ${
-              m.role === "user" ? "bg-blue-100 ml-auto" : "bg-white border"
-            }`}
-          >
-            <pre className="font-sans">{m.content}</pre>
+      {messages.length === 0 ? (
+        <div className="border rounded p-6 bg-gray-50 text-center space-y-3">
+          <p className="text-gray-500 text-sm">Empieza describiendo el sistema que necesitas:</p>
+          <div className="flex flex-wrap gap-2 justify-center">
+            {CHAT_EXAMPLES.map((ex) => (
+              <button
+                key={ex}
+                onClick={() => {
+                  setText(ex);
+                  textareaRef.current?.focus();
+                }}
+                className="text-xs bg-white border rounded-full px-3 py-1.5 text-gray-600 hover:bg-gray-100"
+              >
+                {ex}
+              </button>
+            ))}
           </div>
-        ))}
-        <div ref={endRef} />
-      </div>
-      <div className="flex gap-2">
-        <input
-          className="border rounded px-3 py-2 flex-1"
-          placeholder="Escribe tu mensaje…"
+        </div>
+      ) : (
+        <div className="h-80 overflow-y-auto border rounded p-3 bg-gray-50 space-y-2">
+          {messages.map((m) => (
+            <div
+              key={m.id}
+              className={`text-sm p-2 rounded max-w-[85%] ${
+                m.role === "user" ? "bg-blue-100 ml-auto" : "bg-white border"
+              }`}
+            >
+              <pre className="font-sans">{m.content}</pre>
+            </div>
+          ))}
+          <div ref={endRef} />
+        </div>
+      )}
+      <div className="flex gap-2 items-end">
+        <textarea
+          ref={textareaRef}
+          className="border rounded px-3 py-2 flex-1 resize-none leading-relaxed max-h-60 overflow-y-auto"
+          placeholder="Describe tu sistema… (Enter para enviar, Shift+Enter para nueva línea)"
+          rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
           disabled={sending}
         />
         <button
           onClick={send}
           disabled={sending}
-          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50 shrink-0"
         >
           {sending ? "…" : "Enviar"}
         </button>
       </div>
+      <p className="text-xs text-gray-400">Enter para enviar · Shift+Enter para salto de línea</p>
       <div className="pt-2 border-t flex items-center justify-between">
         <span className="text-xs text-gray-500">
           CIM: <StatusBadge status={cimStatus} />

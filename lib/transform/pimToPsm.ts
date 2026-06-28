@@ -56,9 +56,21 @@ function toResourcePath(entityName: string): string {
  * LLM la repite en ambos lados, el guard anti-duplicados de mas abajo evita
  * que el schema Prisma generado quede invalido por nombres de campo repetidos.
  */
+const INVERSE_CARDINALITY: Record<string, string> = {
+  "1-N": "N-1",
+  "N-1": "1-N",
+  "1-1": "1-1",
+  "N-N": "N-N",
+};
+
 function computeRelationFields(pim: PIM): Map<string, PsmRelationField[]> {
   const entityNames = new Set(pim.entities.map((e) => e.name));
   const byEntity = new Map<string, PsmRelationField[]>();
+  // Pares entidad<->target (entre entidades distintas) ya cubiertos, para
+  // tolerar que el LLM repita la misma relacion desde ambos lados a pesar de
+  // la regla del prompt ("declarala UNA SOLA VEZ"). Sin esto, la segunda
+  // declaracion genera un campo Prisma sin pareja inversa (schema invalido).
+  const seenPairs = new Set<string>();
 
   const push = (entity: string, field: PsmRelationField) => {
     const list = byEntity.get(entity) ?? [];
@@ -74,6 +86,13 @@ function computeRelationFields(pim: PIM): Map<string, PsmRelationField[]> {
           `La relacion "${rel.name}" de "${entity.name}" apunta a una entidad inexistente: "${rel.target}".`
         );
       }
+
+      if (entity.name !== rel.target) {
+        const reverseKey = `${rel.target}|${entity.name}|${INVERSE_CARDINALITY[rel.cardinality]}`;
+        if (seenPairs.has(reverseKey)) continue;
+        seenPairs.add(`${entity.name}|${rel.target}|${rel.cardinality}`);
+      }
+
       const relationName = `${entity.name}_${rel.name}`;
       const inverseName = accessor(entity.name);
 
