@@ -6,7 +6,7 @@
 //  React+Vite, Dockerfiles y docker-compose.
 // ============================================================
 
-import type { PSM, PsmEntity, FileTree } from "../types";
+import type { PSM, PsmEntity, PsmEndpoint, FileTree } from "../types";
 
 function accessor(name: string): string {
   return name.charAt(0).toLowerCase() + name.slice(1);
@@ -55,9 +55,43 @@ function entityConfig(e: PsmEntity) {
   };
 }
 
+// ---- Rutas adicionales declaradas en entity.endpoints (enriquecimiento PSM, ----
+// ---- ver PSM_ENRICHER en prompts.ts). Las 5 rutas CRUD ya estan cubiertas   ----
+// ---- por el motor generico de mas abajo, asi que se excluyen aqui.         ----
+const VALID_HTTP_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
+
+function isBaseCrudEndpoint(ep: PsmEndpoint, base: string): boolean {
+  const method = ep.method.toUpperCase();
+  if (ep.path === base) return method === "GET" || method === "POST";
+  if (ep.path === `${base}/:id`) return method === "GET" || method === "PUT" || method === "DELETE";
+  return false;
+}
+
+function extraEndpointRoute(ep: PsmEndpoint): string {
+  const method = VALID_HTTP_METHODS.has(ep.method.toLowerCase()) ? ep.method.toLowerCase() : "get";
+  const comment = ep.description ? ` - ${ep.description}` : "";
+  return `app.${method}('${ep.path}', async function (req, res) {
+  // TODO: implement${comment}
+  res.json({ message: 'Not yet implemented' });
+});`;
+}
+
+function extraEndpointRoutes(psm: PSM): string {
+  const blocks: string[] = [];
+  for (const e of psm.entities) {
+    const base = `/${routeName(e.name)}`;
+    for (const ep of e.endpoints ?? []) {
+      if (isBaseCrudEndpoint(ep, base)) continue;
+      blocks.push(extraEndpointRoute(ep));
+    }
+  }
+  return blocks.join("\n\n");
+}
+
 // ---- server.js (Express + Prisma, motor CRUD generico, sin backticks) ----
 function backendServer(psm: PSM): string {
   const configs = psm.entities.map(entityConfig);
+  const extraRoutes = extraEndpointRoutes(psm);
   return `const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
@@ -136,7 +170,7 @@ ENTITIES.forEach(function (entity) {
     catch (e) { res.status(400).json({ error: String(e) }); }
   });
 });
-
+${extraRoutes ? "\n" + extraRoutes + "\n" : ""}
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, function () { console.log('Backend escuchando en ' + PORT); });
 `;
