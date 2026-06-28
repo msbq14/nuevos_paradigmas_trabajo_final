@@ -91,11 +91,11 @@ export async function composeUp(
   );
 }
 
-/** docker compose down (para limpiar / re-desplegar). */
+/** docker compose down -v --remove-orphans (para limpiar / re-desplegar / borrar). */
 export async function composeDown(projectId: string): Promise<RunResult> {
   const dir = projectDir(projectId);
   const name = composeProjectName(projectId);
-  return run("docker", ["compose", "-p", name, "down", "-v"], dir);
+  return run("docker", ["compose", "-p", name, "down", "-v", "--remove-orphans"], dir);
 }
 
 /** Estado de los contenedores (para el polling de la UI). */
