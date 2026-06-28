@@ -45,6 +45,13 @@ function entityConfig(e: PsmEntity) {
       required: f.required,
       unique: f.unique,
     })),
+    relations: (e.relations ?? []).map((r) => ({
+      name: r.name,
+      target: r.target,
+      kind: r.kind,
+      foreignKey: r.foreignKey,
+      targetRoute: routeName(r.target),
+    })),
   };
 }
 
@@ -79,7 +86,18 @@ function buildData(entity, body) {
     const v = coerce(f, body[f.name]);
     if (v !== undefined) data[f.name] = v;
   }
+  for (const r of entity.relations) {
+    if (r.kind !== 'reference') continue;
+    const v = body[r.foreignKey];
+    if (v !== undefined && v !== null && v !== '') data[r.foreignKey] = parseInt(v, 10);
+  }
   return data;
+}
+
+function buildInclude(entity) {
+  const include = {};
+  for (const r of entity.relations) include[r.name] = true;
+  return Object.keys(include).length ? include : undefined;
 }
 
 app.get('/', (req, res) => res.json({ status: 'ok', entities: ENTITIES.map(function (e) { return e.route; }) }));
@@ -88,27 +106,28 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 ENTITIES.forEach(function (entity) {
   const model = prisma[entity.accessor];
   const base = '/' + entity.route;
+  const include = buildInclude(entity);
 
   app.get(base, async function (req, res) {
-    try { res.json(await model.findMany({ orderBy: { id: 'desc' } })); }
+    try { res.json(await model.findMany({ orderBy: { id: 'desc' }, include })); }
     catch (e) { res.status(500).json({ error: String(e) }); }
   });
 
   app.post(base, async function (req, res) {
-    try { res.status(201).json(await model.create({ data: buildData(entity, req.body) })); }
+    try { res.status(201).json(await model.create({ data: buildData(entity, req.body), include })); }
     catch (e) { res.status(400).json({ error: String(e) }); }
   });
 
   app.get(base + '/:id', async function (req, res) {
     try {
-      const item = await model.findUnique({ where: { id: parseInt(req.params.id, 10) } });
+      const item = await model.findUnique({ where: { id: parseInt(req.params.id, 10) }, include });
       if (!item) return res.status(404).json({ error: 'no encontrado' });
       res.json(item);
     } catch (e) { res.status(500).json({ error: String(e) }); }
   });
 
   app.put(base + '/:id', async function (req, res) {
-    try { res.json(await model.update({ where: { id: parseInt(req.params.id, 10) }, data: buildData(entity, req.body) })); }
+    try { res.json(await model.update({ where: { id: parseInt(req.params.id, 10) }, data: buildData(entity, req.body), include })); }
     catch (e) { res.status(400).json({ error: String(e) }); }
   });
 
@@ -235,12 +254,26 @@ function inputType(prismaType) {
   return 'text';
 }
 
+function relationLabel(item) {
+  if (!item) return '';
+  const skip = { id: true, createdAt: true };
+  const keys = Object.keys(item);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (skip[k]) continue;
+    if (typeof item[k] === 'string') return item[k];
+  }
+  return '#' + item.id;
+}
+
 export default function CrudView(props) {
   const config = props.config;
   const route = config.route;
+  const refRelations = (config.relations || []).filter(function (r) { return r.kind === 'reference'; });
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({});
   const [error, setError] = useState('');
+  const [relOptions, setRelOptions] = useState({});
 
   function load() {
     fetch(API + '/' + route)
@@ -250,6 +283,21 @@ export default function CrudView(props) {
   }
 
   useEffect(function () { load(); }, [route]);
+
+  useEffect(function () {
+    refRelations.forEach(function (r) {
+      fetch(API + '/' + r.targetRoute)
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          setRelOptions(function (prev) {
+            const next = Object.assign({}, prev);
+            next[r.foreignKey] = Array.isArray(data) ? data : [];
+            return next;
+          });
+        })
+        .catch(function (e) { setError(String(e)); });
+    });
+  }, [route]);
 
   function setField(name, value) {
     setForm(function (prev) { const next = Object.assign({}, prev); next[name] = value; return next; });
@@ -291,6 +339,20 @@ export default function CrudView(props) {
                   ) : (
                     <input type={t} value={form[f.name] === undefined ? '' : form[f.name]} onChange={function (e) { setField(f.name, e.target.value); }} />
                   )}
+                </div>
+              );
+            })}
+            {refRelations.map(function (r) {
+              const options = relOptions[r.foreignKey] || [];
+              return (
+                <div className="field" key={r.foreignKey}>
+                  <label>{r.name} *</label>
+                  <select value={form[r.foreignKey] === undefined ? '' : form[r.foreignKey]} onChange={function (e) { setField(r.foreignKey, e.target.value); }}>
+                    <option value="">-- seleccionar --</option>
+                    {options.map(function (opt) {
+                      return <option key={opt.id} value={opt.id}>{relationLabel(opt)}</option>;
+                    })}
+                  </select>
                 </div>
               );
             })}

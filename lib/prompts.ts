@@ -69,6 +69,7 @@ Reglas:
 - NO agregues un atributo "id"; el id es implicito.
 - "cardinality" solo puede ser: 1-1, 1-N, N-1, N-N.
 - "target" debe ser el nombre de otra entidad existente.
+- Declara cada relacion UNA SOLA VEZ, desde un solo lado (no la repitas en la entidad relacionada).
 - Deriva las entidades de los requisitos del CIM. Cubre todo el dominio.
 - No incluyas nada fuera del JSON.`;
 

@@ -52,10 +52,20 @@ export interface PsmComponent {
   fields: string[];
 }
 
+export interface PsmRelationField {
+  name: string;
+  target: string;
+  kind: "reference" | "collection" | "single";
+  foreignKey?: string; // solo kind "reference"
+  unique?: boolean; // 1-1
+  relationName: string; // nombre @relation, para desambiguar en Prisma
+}
+
 export interface PsmEntity {
   name: string;
   prismaModel: string;
   fields: PsmField[];
+  relations?: PsmRelationField[];
   endpoints: PsmEndpoint[];
   reactComponents: PsmComponent[];
 }
