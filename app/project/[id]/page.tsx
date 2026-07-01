@@ -121,8 +121,11 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     await load();
   }
 
+  const finopsRunning = busy.endsWith(":approve");
+
   return (
     <div className="space-y-4">
+      {finopsRunning && <FinOpsToast />}
       <div className="flex items-center justify-between">
         <div>
           <a href="/" className="text-sm text-blue-600 hover:underline">
@@ -627,6 +630,22 @@ function AutoRunButton({
     >
       {running ? "Auto-run en curso…" : "⚡ Auto-run (todo automático)"}
     </button>
+  );
+}
+
+// -------------------- FinOps Toast --------------------
+function FinOpsToast() {
+  return (
+    <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-white border border-gray-200 shadow-lg rounded-lg px-4 py-3 text-sm text-gray-700">
+      <svg className="animate-spin w-4 h-4 text-blue-500 shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+      </svg>
+      <div>
+        <p className="font-medium">Realizando análisis FinOps</p>
+        <p className="text-xs text-gray-400">Esto puede tardar unos segundos…</p>
+      </div>
+    </div>
   );
 }
 
