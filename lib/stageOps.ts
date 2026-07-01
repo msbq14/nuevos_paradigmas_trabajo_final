@@ -3,6 +3,7 @@
 import { prisma } from "./prisma";
 import { generateCIM, generatePIM, generatePSM, generateCode } from "./pipeline";
 import { validateModel, type ValidationResult } from "./validate";
+import { generateFinOps } from "./finops";
 
 export type StageName = "cim" | "pim" | "psm" | "code";
 
@@ -57,6 +58,8 @@ export async function approveStage(stage: StageName, projectId: string) {
     where: { id: projectId },
     data: { currentStage: next },
   });
+  // Genera el análisis FinOps; se awaita para que esté disponible al recargar el estado.
+  await generateFinOps(stage, projectId);
 }
 
 export async function rejectStage(stage: StageName, projectId: string) {

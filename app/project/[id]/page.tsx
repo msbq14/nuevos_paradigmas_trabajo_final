@@ -12,6 +12,17 @@ type Deployment = {
   logs?: string;
 } | null;
 
+type FinOpsAnalysisRecord = { stage: string; content: string };
+
+type FinOpsResult = {
+  summary: string;
+  estimatedMonthlyCost: { min: number; max: number; currency: string; tier: string };
+  costDrivers: Array<{ name: string; impact: "low" | "medium" | "high"; description: string }>;
+  optimizations: Array<{ priority: "low" | "medium" | "high"; title: string; description: string; estimatedSaving?: string }>;
+  complexity: { score: number; label: string; factors: string[] };
+  stageInsights: string;
+};
+
 type ProjectState = {
   id: string;
   name: string;
@@ -22,7 +33,14 @@ type ProjectState = {
   psm: Stage;
   code: CodeStage;
   deployment: Deployment;
+  finopsAnalyses: FinOpsAnalysisRecord[];
 };
+
+function parseFinOps(analyses: FinOpsAnalysisRecord[], stage: string): FinOpsResult | null {
+  const record = analyses.find((a) => a.stage === stage);
+  if (!record) return null;
+  try { return JSON.parse(record.content) as FinOpsResult; } catch { return null; }
+}
 
 const TABS = [
   { key: "chat", label: "1 · Requisitos" },
@@ -154,6 +172,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.cim?.status}
           busy={busy}
           onAction={stageAction}
+          finops={parseFinOps(state.finopsAnalyses, "cim")}
         />
       )}
       {tab === "pim" && (
@@ -164,6 +183,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.pim?.status}
           busy={busy}
           onAction={stageAction}
+          finops={parseFinOps(state.finopsAnalyses, "pim")}
         />
       )}
       {tab === "psm" && (
@@ -174,6 +194,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.psm?.status}
           busy={busy}
           onAction={stageAction}
+          finops={parseFinOps(state.finopsAnalyses, "psm")}
         />
       )}
       {tab === "code" && (
@@ -182,10 +203,17 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.code?.status}
           busy={busy}
           onAction={stageAction}
+          finops={parseFinOps(state.finopsAnalyses, "code")}
         />
       )}
       {tab === "deploy" && (
-        <DeployPanel id={id} deployment={state.deployment} codeStatus={state.code?.status} onReload={load} />
+        <DeployPanel
+          id={id}
+          deployment={state.deployment}
+          codeStatus={state.code?.status}
+          onReload={load}
+          finops={parseFinOps(state.finopsAnalyses, "deploy")}
+        />
       )}
     </div>
   );
@@ -325,6 +353,7 @@ function ModelPanel({
   status,
   busy,
   onAction,
+  finops,
 }: {
   title: string;
   name: "cim" | "pim" | "psm";
@@ -332,6 +361,7 @@ function ModelPanel({
   status?: string;
   busy: string;
   onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
+  finops: FinOpsResult | null;
 }) {
   const [draft, setDraft] = useState(content ?? "");
   useEffect(() => {
@@ -392,6 +422,8 @@ function ModelPanel({
           </>
         )}
       </div>
+
+      {finops && <FinOpsPanel finops={finops} />}
     </div>
   );
 }
@@ -402,11 +434,13 @@ function CodePanel({
   status,
   busy,
   onAction,
+  finops,
 }: {
   files?: string;
   status?: string;
   busy: string;
   onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
+  finops: FinOpsResult | null;
 }) {
   const [selected, setSelected] = useState<string>("");
   const tree: Record<string, string> = files ? JSON.parse(files) : {};
@@ -466,6 +500,8 @@ function CodePanel({
           </button>
         )}
       </div>
+
+      {finops && <FinOpsPanel finops={finops} />}
     </div>
   );
 }
@@ -476,11 +512,13 @@ function DeployPanel({
   deployment,
   codeStatus,
   onReload,
+  finops,
 }: {
   id: string;
   deployment: Deployment;
   codeStatus?: string;
   onReload: () => void;
+  finops: FinOpsResult | null;
 }) {
   const [starting, setStarting] = useState(false);
 
@@ -545,6 +583,17 @@ function DeployPanel({
           {deployment.logs}
         </pre>
       )}
+
+      {status === "running" && !finops && (
+        <div className="mt-4 border-t pt-4 flex items-center gap-2 text-sm text-gray-400">
+          <svg className="animate-spin w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+          </svg>
+          Generando análisis FinOps del despliegue…
+        </div>
+      )}
+      {finops && <FinOpsPanel finops={finops} />}
     </div>
   );
 }
@@ -578,6 +627,128 @@ function AutoRunButton({
     >
       {running ? "Auto-run en curso…" : "⚡ Auto-run (todo automático)"}
     </button>
+  );
+}
+
+// -------------------- FinOps Panel --------------------
+const IMPACT_STYLE: Record<string, string> = {
+  low: "bg-green-100 text-green-700",
+  medium: "bg-yellow-100 text-yellow-700",
+  high: "bg-red-100 text-red-700",
+};
+const PRIORITY_STYLE: Record<string, string> = {
+  low: "bg-gray-100 text-gray-600",
+  medium: "bg-orange-100 text-orange-700",
+  high: "bg-red-100 text-red-700",
+};
+
+function FinOpsPanel({ finops }: { finops: FinOpsResult }) {
+  return (
+    <div className="mt-4 border-t pt-4 space-y-4">
+      {/* Cabecera */}
+      <div className="flex items-center gap-2">
+        <span className="text-base select-none">💰</span>
+        <h3 className="font-semibold text-sm text-gray-800">Análisis FinOps</h3>
+      </div>
+
+      {/* Resumen + Costo */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="bg-gray-50 rounded-lg p-3">
+          <p className="text-xs text-gray-400 mb-1 uppercase tracking-wide">Resumen</p>
+          <p className="text-sm text-gray-700 leading-snug">{finops.summary}</p>
+        </div>
+        <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+          <p className="text-xs text-gray-400 mb-1 uppercase tracking-wide">Costo mensual estimado</p>
+          <p className="text-2xl font-bold text-blue-700">
+            ${finops.estimatedMonthlyCost.min}–${finops.estimatedMonthlyCost.max}
+            <span className="text-sm font-normal text-blue-500"> {finops.estimatedMonthlyCost.currency}/mes</span>
+          </p>
+          <p className="text-xs text-gray-500 mt-0.5">{finops.estimatedMonthlyCost.tier}</p>
+        </div>
+      </div>
+
+      {/* Complejidad */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-gray-500">Complejidad:</span>
+        <div className="flex gap-1">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              className={`w-3.5 h-3.5 rounded-sm ${
+                i <= finops.complexity.score ? "bg-blue-500" : "bg-gray-200"
+              }`}
+            />
+          ))}
+        </div>
+        <span className="text-xs font-semibold text-gray-700">{finops.complexity.label}</span>
+        {finops.complexity.factors.length > 0 && (
+          <span className="text-xs text-gray-400">{finops.complexity.factors.join(" · ")}</span>
+        )}
+      </div>
+
+      {/* Impulsores de costo */}
+      {finops.costDrivers.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Impulsores de costo
+          </p>
+          <div className="space-y-1.5">
+            {finops.costDrivers.map((d, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span
+                  className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                    IMPACT_STYLE[d.impact] ?? IMPACT_STYLE.low
+                  }`}
+                >
+                  {d.impact}
+                </span>
+                <p className="text-xs text-gray-600">
+                  <span className="font-medium text-gray-700">{d.name}:</span> {d.description}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recomendaciones */}
+      {finops.optimizations.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Recomendaciones de optimización
+          </p>
+          <div className="space-y-2">
+            {finops.optimizations.map((o, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span
+                  className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                    PRIORITY_STYLE[o.priority] ?? PRIORITY_STYLE.low
+                  }`}
+                >
+                  {o.priority}
+                </span>
+                <div>
+                  <p className="text-xs font-medium text-gray-700">
+                    {o.title}
+                    {o.estimatedSaving && (
+                      <span className="ml-1 text-green-600 font-normal">({o.estimatedSaving})</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-gray-500">{o.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Insight específico de la etapa */}
+      {finops.stageInsights && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-800 leading-snug">
+          {finops.stageInsights}
+        </div>
+      )}
+    </div>
   );
 }
 

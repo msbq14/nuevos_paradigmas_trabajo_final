@@ -22,12 +22,13 @@ model Project {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  messages RequirementMessage[]
-  cim      CIMModel?
-  pim      PIMModel?
-  psm      PSMModel?
-  code     GeneratedCode?
-  deployment Deployment?
+  messages        RequirementMessage[]
+  cim             CIMModel?
+  pim             PIMModel?
+  psm             PSMModel?
+  code            GeneratedCode?
+  deployment      Deployment?
+  finopsAnalyses  FinOpsAnalysis[]
 }
 
 model RequirementMessage {
@@ -102,4 +103,17 @@ model Deployment {
   updatedAt   DateTime @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model FinOpsAnalysis {
+  id        String   @id @default(cuid())
+  projectId String
+  stage     String   // "cim" | "pim" | "psm" | "code" | "deploy"
+  content   String   // JSON: FinOpsResult
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, stage])
 }

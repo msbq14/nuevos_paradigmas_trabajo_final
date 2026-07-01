@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { composeUp, portsFor, writeFiles } from "@/lib/deploy";
 import type { FileTree } from "@/lib/types";
+import { generateFinOps } from "@/lib/finops";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
@@ -69,6 +70,7 @@ export async function POST(
         where: { id: projectId },
         data: { currentStage: 6 },
       });
+      await generateFinOps("deploy", projectId);
     }
   })().catch(async (e) => {
     await prisma.deployment

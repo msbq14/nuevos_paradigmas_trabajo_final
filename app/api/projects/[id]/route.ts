@@ -20,6 +20,7 @@ export async function GET(
       psm: true,
       code: true,
       deployment: true,
+      finopsAnalyses: true,
     },
   });
   if (!project) {
