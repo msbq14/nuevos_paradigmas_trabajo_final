@@ -156,13 +156,18 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     }
   }, [busy]);
 
-  // Polling mientras hay despliegue en curso.
+  // Polling mientras hay despliegue en curso o mientras el análisis FinOps del deploy aún no llega.
+  // generateFinOps() se ejecuta en background DESPUÉS de que el status pasa a "running",
+  // por eso hay que seguir polling hasta que el registro aparezca en finopsAnalyses.
   useEffect(() => {
-    if (state?.deployment?.status === "building") {
+    const deployRunningNoFinOps =
+      state?.deployment?.status === "running" &&
+      !state.finopsAnalyses.some((a) => a.stage === "deploy");
+    if (state?.deployment?.status === "building" || deployRunningNoFinOps) {
       const t = setInterval(load, 3000);
       return () => clearInterval(t);
     }
-  }, [state?.deployment?.status, load]);
+  }, [state?.deployment?.status, state?.finopsAnalyses, load]);
 
   if (!state) return <p className="text-gray-500">Cargando…</p>;
 
