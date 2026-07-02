@@ -12,9 +12,9 @@ export const maxDuration = 600;
 // y luego lanza el despliegue Docker en background.
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const projectId = params.id;
+  const { id: projectId } = await params;
 
   const messages = await prisma.requirementMessage.findMany({
     where: { projectId },

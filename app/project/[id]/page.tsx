@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
+import { ClassDiagramCard, UseCaseDiagramCard } from "@/components/UmlDiagrams";
+import {
+  buildCimUseCaseDiagram,
+  buildPimClassDiagram,
+  parseCim,
+  parsePim,
+} from "@/lib/uml";
 
 type Stage = { content: string; status: string } | null;
 type CodeStage = { files: string; status: string } | null;
@@ -88,6 +95,10 @@ function fmtCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const TABS = [
   { key: "chat", label: "1 · Requisitos" },
   { key: "cim", label: "2 · CIM" },
@@ -125,8 +136,49 @@ function StatusBadge({ status }: { status?: string }) {
 
 const STAGE_LABEL: Record<string, string> = { cim: "CIM", pim: "PIM", psm: "PSM", code: "Código" };
 
-export default function ProjectPage({ params }: { params: { id: string } }) {
-  const id = params.id;
+type TabVisualState = "done" | "pending" | "untouched";
+
+function getTabVisualState(tab: TabKey, state: ProjectState): TabVisualState {
+  switch (tab) {
+    case "chat":
+      if (state.cim) return "done";
+      if (state.messages.length > 0) return "pending";
+      return "untouched";
+    case "cim":
+    case "pim":
+    case "psm":
+      return getStageVisualState(state[tab]);
+    case "code":
+      return getStageVisualState(state.code);
+    case "deploy":
+      if (!state.deployment || state.deployment.status === "idle") return "untouched";
+      return state.deployment.status === "running" ? "done" : "pending";
+    default:
+      return "untouched";
+  }
+}
+
+function getStageVisualState(stage: Stage | CodeStage): TabVisualState {
+  if (!stage) return "untouched";
+  return stage.status === "approved" ? "done" : "pending";
+}
+
+function getTabClasses(visualState: TabVisualState, isActive: boolean): string {
+  const base = "px-3 py-2 text-sm rounded-t border transition-colors";
+  const tone =
+    visualState === "done"
+      ? "bg-green-100 text-green-900 border-green-200"
+      : visualState === "pending"
+        ? "bg-red-100 text-red-900 border-red-200"
+        : "bg-gray-100 text-gray-600 border-gray-200";
+
+  const active = isActive ? " -mb-px border-b-white font-semibold" : " opacity-85 hover:opacity-100";
+
+  return `${base} ${tone}${active}`;
+}
+
+export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
   const [state, setState] = useState<ProjectState | null>(null);
   const [tab, setTab] = useState<TabKey>("chat");
   const [busy, setBusy] = useState<string>("");
@@ -190,11 +242,16 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   }
 
   const AI_GENERATING = ["cim:generate", "pim:generate", "psm:generate"].includes(busy);
+  const approvingStage = busy.endsWith(":approve") ? busy.split(":")[0] : "";
+  const diagramGeneratingStage =
+    busy === "cim:generate" ? "cim" : busy === "pim:generate" ? "pim" : "";
 
   return (
     <div className="space-y-4">
       {AI_GENERATING && <FinOpsToast />}
+      {diagramGeneratingStage && <DiagramToast mode="generate" stage={diagramGeneratingStage} />}
       {finopsDone && <FinOpsDoneToast stage={finopsDone} />}
+      {approvingStage && <ApprovalToast stage={approvingStage} />}
       <div className="flex items-center justify-between">
         <div>
           <a href="/" className="text-sm text-blue-600 hover:underline">
@@ -212,17 +269,18 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       )}
 
       <div className="flex gap-1 flex-wrap border-b">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`px-3 py-2 text-sm rounded-t ${
-              tab === t.key ? "bg-white border border-b-white -mb-px font-medium" : "text-gray-500"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const visualState = getTabVisualState(t.key, state);
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={getTabClasses(visualState, tab === t.key)}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </div>
 
       {tab === "chat" && (
@@ -243,6 +301,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           busy={busy}
           onAction={stageAction}
           aiCost={parseAICost(state.finopsAnalyses, "cim")}
+          diagramTitle="Diagrama de casos de uso UML"
         />
       )}
       {tab === "pim" && (
@@ -254,6 +313,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           busy={busy}
           onAction={stageAction}
           aiCost={parseAICost(state.finopsAnalyses, "pim")}
+          diagramTitle="Diagrama de clases UML"
         />
       )}
       {tab === "psm" && (
@@ -430,22 +490,42 @@ function CimPanel({
   busy,
   onAction,
   aiCost,
+  diagramTitle,
 }: {
   content?: string;
   status?: string;
   busy: string;
   onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
   aiCost: AICostResult | null;
+  diagramTitle?: string;
 }) {
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState(content ? pretty(content) : "");
+  const [diagramSource, setDiagramSource] = useState(content ?? "");
+  const [updatingDiagram, setUpdatingDiagram] = useState(false);
   useEffect(() => { setDraft(content ? pretty(content) : ""); }, [content]);
+  useEffect(() => { setDiagramSource(content ?? ""); }, [content]);
 
   const generating = busy === "cim:generate";
+  const canShowDiagram = Boolean(diagramSource && diagramTitle);
+  const cimDiagramData =
+    diagramSource
+      ? (() => {
+          const parsed = parseCim(diagramSource);
+          return parsed ? buildCimUseCaseDiagram(parsed) : null;
+        })()
+      : null;
 
   let cim: CimData | null = null;
   if (content) {
     try { cim = JSON.parse(content) as CimData; } catch { /* render edit mode si JSON inválido */ }
+  }
+
+  async function refreshDiagram() {
+    setUpdatingDiagram(true);
+    await wait(500);
+    setDiagramSource(draft);
+    setUpdatingDiagram(false);
   }
 
   return (
@@ -541,65 +621,6 @@ function CimPanel({
               </ul>
             </div>
 
-            {/* Actores */}
-            <div className="border rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
-                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  Actores
-                  <span className="ml-1.5 text-green-600 font-bold">{cim.actors?.length ?? 0}</span>
-                </h3>
-              </div>
-              {(cim.actors ?? []).length === 0 && (
-                <p className="text-xs text-gray-400 italic">Sin actores</p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {(cim.actors ?? []).map((actor) => (
-                  <div key={actor.name} className="group relative">
-                    <span className="inline-flex items-center gap-1 text-xs bg-green-50 border border-green-200 text-green-800 rounded-full px-2.5 py-1 cursor-default">
-                      <span>👤</span> {actor.name}
-                    </span>
-                    {actor.description && (
-                      <div className="absolute bottom-full left-0 mb-1 hidden group-hover:block z-10 bg-gray-800 text-white text-xs rounded px-2 py-1 w-48 leading-snug shadow-lg">
-                        {actor.description}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Casos de Uso */}
-            <div className="border rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  Casos de Uso
-                  <span className="ml-1.5 text-amber-600 font-bold">{cim.use_cases?.length ?? 0}</span>
-                </h3>
-              </div>
-              {(cim.use_cases ?? []).length === 0 && (
-                <p className="text-xs text-gray-400 italic">Sin casos de uso</p>
-              )}
-              <ul className="space-y-2">
-                {(cim.use_cases ?? []).map((uc) => (
-                  <li key={uc.name} className="flex items-start gap-2">
-                    <span className="shrink-0 text-amber-500 mt-0.5">◆</span>
-                    <div>
-                      <p className="text-xs font-medium text-gray-700">{uc.name}</p>
-                      {uc.actor && (
-                        <span className="inline-block text-xs bg-green-50 text-green-700 rounded-full px-1.5 py-0.5 mr-1">
-                          👤 {uc.actor}
-                        </span>
-                      )}
-                      {uc.description && (
-                        <p className="text-xs text-gray-500 leading-snug mt-0.5">{uc.description}</p>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
           </div>
         </div>
       )}
@@ -630,6 +651,15 @@ function CimPanel({
             Guardar edición
           </button>
         )}
+        {content && diagramTitle && (
+          <button
+            onClick={refreshDiagram}
+            disabled={updatingDiagram}
+            className="bg-amber-100 text-amber-800 px-3 py-2 rounded text-sm disabled:opacity-50"
+          >
+            {updatingDiagram ? "Actualizando diagrama…" : "Actualizar diagrama"}
+          </button>
+        )}
         {content && (
           <>
             <button
@@ -648,6 +678,23 @@ function CimPanel({
         )}
       </div>
 
+      {!canShowDiagram && content && diagramTitle && (
+        <p className="text-sm text-gray-500">
+          Genera o regenera el modelo para mostrar el {diagramTitle.toLowerCase()}.
+        </p>
+      )}
+
+      {canShowDiagram && cimDiagramData && (
+        <UseCaseDiagramCard title={diagramTitle!} data={cimDiagramData} />
+      )}
+
+      {canShowDiagram && !cimDiagramData && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded">
+          No se pudo generar el diagrama UML a partir del JSON actual de esta etapa.
+        </div>
+      )}
+
+      {updatingDiagram && <DiagramInlineFeedback />}
       {aiCost && <AICostPanel aiCost={aiCost} />}
     </div>
   );
@@ -662,6 +709,7 @@ function ModelPanel({
   busy,
   onAction,
   aiCost,
+  diagramTitle,
 }: {
   title: string;
   name: "cim" | "pim" | "psm";
@@ -670,13 +718,42 @@ function ModelPanel({
   busy: string;
   onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
   aiCost: AICostResult | null;
+  diagramTitle?: string;
 }) {
   const [draft, setDraft] = useState(content ?? "");
+  const [diagramSource, setDiagramSource] = useState(content ?? "");
+  const [updatingDiagram, setUpdatingDiagram] = useState(false);
   useEffect(() => {
     setDraft(content ? pretty(content) : "");
   }, [content]);
+  useEffect(() => {
+    setDiagramSource(content ?? "");
+  }, [content]);
 
   const generating = busy === `${name}:generate`;
+  const canShowDiagram = Boolean(diagramSource && diagramTitle && (name === "cim" || name === "pim"));
+  const cimDiagramData =
+    diagramSource && name === "cim"
+      ? (() => {
+          const parsed = parseCim(diagramSource);
+          return parsed ? buildCimUseCaseDiagram(parsed) : null;
+        })()
+      : null;
+  const pimDiagramData =
+    diagramSource && name === "pim"
+      ? (() => {
+          const parsed = parsePim(diagramSource);
+          return parsed ? buildPimClassDiagram(parsed) : null;
+        })()
+      : null;
+  const showDiagramHint = Boolean(!canShowDiagram && content && diagramTitle);
+
+  async function refreshDiagram() {
+    setUpdatingDiagram(true);
+    await wait(500);
+    setDiagramSource(draft);
+    setUpdatingDiagram(false);
+  }
 
   return (
     <div className="bg-white border rounded-lg p-4 space-y-3">
@@ -715,6 +792,15 @@ function ModelPanel({
             >
               Guardar edición
             </button>
+            {diagramTitle && (
+              <button
+                onClick={refreshDiagram}
+                disabled={updatingDiagram}
+                className="bg-amber-100 text-amber-800 px-3 py-2 rounded text-sm disabled:opacity-50"
+              >
+                {updatingDiagram ? "Actualizando diagrama…" : "Actualizar diagrama"}
+              </button>
+            )}
             <button
               onClick={() => onAction(name, "approve")}
               className="bg-green-600 text-white px-3 py-2 rounded text-sm"
@@ -731,6 +817,33 @@ function ModelPanel({
         )}
       </div>
 
+      {showDiagramHint && (
+        <p className="text-sm text-gray-500">
+          Genera o regenera el modelo para mostrar el {diagramTitle?.toLowerCase()}.
+        </p>
+      )}
+
+      {canShowDiagram && diagramTitle && name === "cim" && cimDiagramData && (
+        <UseCaseDiagramCard title={diagramTitle} data={cimDiagramData} />
+      )}
+
+      {canShowDiagram && diagramTitle && name === "pim" && pimDiagramData && (
+        <ClassDiagramCard title={diagramTitle} data={pimDiagramData} />
+      )}
+
+      {canShowDiagram && diagramTitle && name === "cim" && !cimDiagramData && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded">
+          No se pudo generar el diagrama UML a partir del JSON actual de esta etapa.
+        </div>
+      )}
+
+      {canShowDiagram && diagramTitle && name === "pim" && !pimDiagramData && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded">
+          No se pudo generar el diagrama UML a partir del JSON actual de esta etapa.
+        </div>
+      )}
+
+      {updatingDiagram && <DiagramInlineFeedback />}
       {aiCost && <AICostPanel aiCost={aiCost} />}
     </div>
   );
@@ -935,6 +1048,73 @@ function AutoRunButton({
     >
       {running ? "Auto-run en curso…" : "⚡ Auto-run (todo automático)"}
     </button>
+  );
+}
+
+// -------------------- Approval Toast --------------------
+function ApprovalToast({ stage }: { stage: string }) {
+  const title =
+    stage === "cim"
+      ? "Aprobando CIM y creando diagrama de casos de uso"
+      : stage === "pim"
+        ? "Aprobando PIM y actualizando diagrama UML"
+        : "Aprobando etapa";
+  const message =
+    stage === "cim" || stage === "pim"
+      ? "Esto puede tardar unos segundos…"
+      : "Guardando cambios de la etapa…";
+
+  return (
+    <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-white border border-gray-200 shadow-lg rounded-lg px-4 py-3 text-sm text-gray-700">
+      <svg className="animate-spin w-4 h-4 text-blue-500 shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+      </svg>
+      <div>
+        <p className="font-medium">{title}</p>
+        <p className="text-xs text-gray-400">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function DiagramToast({ mode, stage }: { mode: "generate" | "refresh"; stage: string }) {
+  const title =
+    mode === "generate"
+      ? stage === "cim"
+        ? "Creando diagrama de casos de uso"
+        : "Creando diagrama de clases"
+      : stage === "cim"
+        ? "Actualizando diagrama de casos de uso"
+        : "Actualizando diagrama de clases";
+  const message =
+    mode === "generate"
+      ? "Se renderizará automáticamente al terminar la generación."
+      : "Aplicando los cambios del JSON al diagrama.";
+
+  return (
+    <div className="fixed top-24 right-4 z-50 flex items-center gap-3 bg-white border border-amber-200 shadow-lg rounded-lg px-4 py-3 text-sm text-gray-700">
+      <svg className="animate-spin w-4 h-4 text-amber-500 shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+      </svg>
+      <div>
+        <p className="font-medium">{title}</p>
+        <p className="text-xs text-gray-400">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function DiagramInlineFeedback() {
+  return (
+    <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+      <svg className="animate-spin w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+      </svg>
+      <span>Actualizando diagrama, espera un momento…</span>
+    </div>
   );
 }
 

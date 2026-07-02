@@ -4,7 +4,7 @@
   "private": true,
   "description": "Orquestador MDD asistido por IA: lenguaje natural -> CIM -> PIM -> PSM -> codigo -> Docker",
   "scripts": {
-    "predev": "prisma generate && node scripts/ensure-sqlite-db.mjs && prisma db push --skip-generate --accept-data-loss",
+    "predev": "node scripts/reset-next-cache.mjs && prisma generate && node scripts/ensure-sqlite-db.mjs && prisma db push --skip-generate --accept-data-loss",
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
@@ -17,9 +17,9 @@
     "@prisma/client": "5.22.0",
     "ajv": "8.17.1",
     "ajv-formats": "3.0.1",
-    "next": "^14.2.35",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "next": "15.5.20",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
     "@types/node": "20.14.10",

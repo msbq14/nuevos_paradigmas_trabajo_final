@@ -118,6 +118,18 @@ export const pimSchema = {
                   type: "string",
                   enum: ["1-1", "1-N", "N-1", "N-N"],
                 },
+                kind: {
+                  type: "string",
+                  enum: [
+                    "association",
+                    "bidirectional_association",
+                    "aggregation",
+                    "composition",
+                    "dependency",
+                    "inheritance",
+                    "realization",
+                  ],
+                },
               },
             },
           },

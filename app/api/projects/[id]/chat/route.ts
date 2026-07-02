@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 // Guarda el mensaje del usuario, llama a DeepSeek (analista) y guarda la respuesta.
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const projectId = params.id;
+  const { id: projectId } = await params;
   const { content } = await req.json().catch(() => ({}));
   if (!content || typeof content !== "string") {
     return NextResponse.json({ error: "Falta 'content'." }, { status: 400 });

@@ -19,6 +19,14 @@ export interface PimRelation {
   name: string;
   target: string;
   cardinality: "1-1" | "1-N" | "N-1" | "N-N";
+  kind?:
+    | "association"
+    | "bidirectional_association"
+    | "aggregation"
+    | "composition"
+    | "dependency"
+    | "inheritance"
+    | "realization";
 }
 
 export interface PimEntity {

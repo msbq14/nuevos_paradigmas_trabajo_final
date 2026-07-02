@@ -10,18 +10,19 @@ export const maxDuration = 600;
 // GET -> estado actual del despliegue (para polling de la UI)
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const dep = await prisma.deployment.findUnique({ where: { projectId: params.id } });
+  const { id } = await params;
+  const dep = await prisma.deployment.findUnique({ where: { projectId: id } });
   return NextResponse.json(dep ?? { status: "idle" });
 }
 
 // POST -> escribe los archivos y lanza docker compose up (en background).
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const projectId = params.id;
+  const { id: projectId } = await params;
   const code = await prisma.generatedCode.findUnique({ where: { projectId } });
   if (!code || code.status !== "approved") {
     return NextResponse.json(

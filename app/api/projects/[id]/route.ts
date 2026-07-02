@@ -9,10 +9,11 @@ export const dynamic = "force-dynamic";
 // GET /api/projects/:id -> estado completo del pipeline
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   const project = await prisma.project.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: {
       messages: { orderBy: { order: "asc" } },
       cim: true,
@@ -32,24 +33,25 @@ export async function GET(
 // DELETE /api/projects/:id
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const dir = projectDir(params.id);
+  const { id } = await params;
+  const dir = projectDir(id);
 
   if (existsSync(dir)) {
-    const result = await composeDown(params.id);
+    const result = await composeDown(id);
     if (result.code !== 0) {
       console.error(
-        `docker compose down fallo para el proyecto ${params.id} (continuando con el borrado):`,
+        `docker compose down fallo para el proyecto ${id} (continuando con el borrado):`,
         result.output
       );
     }
 
     await rm(dir, { recursive: true, force: true }).catch((err) => {
-      console.error(`No se pudo borrar generated-apps/${params.id}:`, err);
+      console.error(`No se pudo borrar generated-apps/${id}:`, err);
     });
   }
 
-  await prisma.project.delete({ where: { id: params.id } }).catch(() => {});
+  await prisma.project.delete({ where: { id } }).catch(() => {});
   return NextResponse.json({ ok: true });
 }

@@ -13,9 +13,9 @@ export const maxDuration = 120;
 // POST /api/projects/:id/stage/:name  { action: generate|approve|reject|edit, content? }
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string; name: string } }
+  { params }: { params: Promise<{ id: string; name: string }> }
 ) {
-  const { id, name } = params;
+  const { id, name } = await params;
   if (!isStageName(name)) {
     return NextResponse.json({ error: "Etapa invalida." }, { status: 400 });
   }

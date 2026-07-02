@@ -58,7 +58,7 @@ Devuelve EXCLUSIVAMENTE JSON con esta forma:
         { "name": "anio", "type": "Integer", "required": false }
       ],
       "relations": [
-        { "name": "prestamos", "target": "Prestamo", "cardinality": "1-N" }
+        { "name": "prestamos", "target": "Prestamo", "cardinality": "1-N", "kind": "association" }
       ]
     }
   ]
@@ -68,8 +68,15 @@ Reglas:
 - Nombres de entidad en PascalCase singular, nombres de atributo en camelCase.
 - NO agregues un atributo "id"; el id es implicito.
 - "cardinality" solo puede ser: 1-1, 1-N, N-1, N-N.
+- "kind" puede ser: association, bidirectional_association, aggregation, composition, dependency, inheritance, realization.
 - "target" debe ser el nombre de otra entidad existente.
 - Declara cada relacion UNA SOLA VEZ, desde un solo lado (no la repitas en la entidad relacionada).
+- Ninguna entidad puede quedar aislada: cada entidad debe participar en al menos una relacion, ya sea como origen o como destino.
+- Usa "association" como valor por defecto cuando no haya una semantica mas especifica.
+- Usa "aggregation" o "composition" solo cuando la relacion todo-parte sea clara en el dominio.
+- Usa "inheritance" solo si realmente existe una especializacion/generalizacion entre entidades del dominio.
+- Usa "realization" solo si el dominio explicita interfaces o contratos.
+- Usa "dependency" solo para dependencias de uso; evita usarla para relaciones persistentes del dominio.
 - Deriva las entidades de los requisitos del CIM. Cubre todo el dominio.
 - No incluyas nada fuera del JSON.`;
 
