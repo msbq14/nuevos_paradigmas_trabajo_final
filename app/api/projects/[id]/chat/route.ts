@@ -37,7 +37,8 @@ export async function POST(
 
   let reply: string;
   try {
-    reply = await callDeepSeek(history, REQUIREMENTS_ANALYST);
+    const result = await callDeepSeek(history, REQUIREMENTS_ANALYST);
+    reply = result.content;
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });
   }

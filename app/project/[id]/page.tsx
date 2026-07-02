@@ -14,7 +14,29 @@ type Deployment = {
 
 type FinOpsAnalysisRecord = { stage: string; content: string };
 
+type AICostResult = {
+  kind: "ai_cost";
+  // Datos brutos de la API
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costUSD: number;
+  apiCalls: number;
+  priceInputPer1M: number;
+  priceOutputPer1M: number;
+  note?: string;
+  // Análisis FinOps generado por DeepSeek
+  efficiencyScore: number;
+  efficiencyLabel: string;
+  costDrivers: Array<{ factor: string; impact: "low" | "medium" | "high"; detail: string }>;
+  recommendations: Array<{ priority: "low" | "medium" | "high"; title: string; detail: string }>;
+  monthlyProjection: { runsPerMonth: number; costUSD: number };
+  insight: string;
+};
+
 type FinOpsResult = {
+  kind: "full_finops";
   summary: string;
   estimatedMonthlyCost: { min: number; max: number; currency: string; tier: string };
   costDrivers: Array<{ name: string; impact: "low" | "medium" | "high"; description: string }>;
@@ -36,10 +58,34 @@ type ProjectState = {
   finopsAnalyses: FinOpsAnalysisRecord[];
 };
 
-function parseFinOps(analyses: FinOpsAnalysisRecord[], stage: string): FinOpsResult | null {
+function parseAICost(analyses: FinOpsAnalysisRecord[], stage: string): AICostResult | null {
   const record = analyses.find((a) => a.stage === stage);
   if (!record) return null;
-  try { return JSON.parse(record.content) as FinOpsResult; } catch { return null; }
+  try {
+    const parsed = JSON.parse(record.content);
+    return parsed.kind === "ai_cost" ? (parsed as AICostResult) : null;
+  } catch { return null; }
+}
+
+function parseFullFinOps(analyses: FinOpsAnalysisRecord[]): FinOpsResult | null {
+  const record = analyses.find((a) => a.stage === "deploy");
+  if (!record) return null;
+  try {
+    const parsed = JSON.parse(record.content);
+    return parsed.kind === "full_finops" ? (parsed as FinOpsResult) : null;
+  } catch { return null; }
+}
+
+function fmtTokens(n: number): string {
+  return n.toLocaleString("es");
+}
+
+function fmtCost(usd: number): string {
+  if (usd === 0) return "$0.00";
+  if (usd < 0.000001) return "<$0.000001";
+  if (usd < 0.001)    return `$${usd.toFixed(6)}`;
+  if (usd < 0.01)     return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 const TABS = [
@@ -77,12 +123,16 @@ function StatusBadge({ status }: { status?: string }) {
   );
 }
 
+const STAGE_LABEL: Record<string, string> = { cim: "CIM", pim: "PIM", psm: "PSM", code: "Código" };
+
 export default function ProjectPage({ params }: { params: { id: string } }) {
   const id = params.id;
   const [state, setState] = useState<ProjectState | null>(null);
   const [tab, setTab] = useState<TabKey>("chat");
   const [busy, setBusy] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const [finopsDone, setFinopsDone] = useState<string | null>(null);
+  const prevBusyRef = useRef<string>("");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/projects/${id}`);
@@ -92,6 +142,19 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Detecta cuando la generación de una etapa con IA acaba de terminar.
+  useEffect(() => {
+    const prev = prevBusyRef.current;
+    prevBusyRef.current = busy;
+    const AI_STAGES = ["cim", "pim", "psm"];
+    const prevStage = prev.split(":")[0];
+    if (prev.endsWith(":generate") && busy === "" && AI_STAGES.includes(prevStage)) {
+      setFinopsDone(STAGE_LABEL[prevStage] ?? prevStage.toUpperCase());
+      const t = setTimeout(() => setFinopsDone(null), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [busy]);
 
   // Polling mientras hay despliegue en curso.
   useEffect(() => {
@@ -121,11 +184,12 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     await load();
   }
 
-  const finopsRunning = busy.endsWith(":approve");
+  const AI_GENERATING = ["cim:generate", "pim:generate", "psm:generate"].includes(busy);
 
   return (
     <div className="space-y-4">
-      {finopsRunning && <FinOpsToast />}
+      {AI_GENERATING && <FinOpsToast />}
+      {finopsDone && <FinOpsDoneToast stage={finopsDone} />}
       <div className="flex items-center justify-between">
         <div>
           <a href="/" className="text-sm text-blue-600 hover:underline">
@@ -168,14 +232,12 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       )}
 
       {tab === "cim" && (
-        <ModelPanel
-          title="CIM — Requisitos formalizados"
-          name="cim"
+        <CimPanel
           content={state.cim?.content}
           status={state.cim?.status}
           busy={busy}
           onAction={stageAction}
-          finops={parseFinOps(state.finopsAnalyses, "cim")}
+          aiCost={parseAICost(state.finopsAnalyses, "cim")}
         />
       )}
       {tab === "pim" && (
@@ -186,7 +248,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.pim?.status}
           busy={busy}
           onAction={stageAction}
-          finops={parseFinOps(state.finopsAnalyses, "pim")}
+          aiCost={parseAICost(state.finopsAnalyses, "pim")}
         />
       )}
       {tab === "psm" && (
@@ -197,7 +259,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.psm?.status}
           busy={busy}
           onAction={stageAction}
-          finops={parseFinOps(state.finopsAnalyses, "psm")}
+          aiCost={parseAICost(state.finopsAnalyses, "psm")}
         />
       )}
       {tab === "code" && (
@@ -206,7 +268,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           status={state.code?.status}
           busy={busy}
           onAction={stageAction}
-          finops={parseFinOps(state.finopsAnalyses, "code")}
+          aiCost={parseAICost(state.finopsAnalyses, "code")}
         />
       )}
       {tab === "deploy" && (
@@ -215,7 +277,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           deployment={state.deployment}
           codeStatus={state.code?.status}
           onReload={load}
-          finops={parseFinOps(state.finopsAnalyses, "deploy")}
+          finops={parseFullFinOps(state.finopsAnalyses)}
         />
       )}
     </div>
@@ -348,6 +410,244 @@ function ChatPanel({
   );
 }
 
+// -------------------- CIM Panel (vista estructurada) --------------------
+type CimData = {
+  domain?: string;
+  functional_requirements?: Array<{ id: string; description: string }>;
+  non_functional_requirements?: Array<{ id: string; description: string; category?: string }>;
+  actors?: Array<{ name: string; description?: string }>;
+  use_cases?: Array<{ name: string; actor?: string; description?: string }>;
+};
+
+function CimPanel({
+  content,
+  status,
+  busy,
+  onAction,
+  aiCost,
+}: {
+  content?: string;
+  status?: string;
+  busy: string;
+  onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
+  aiCost: AICostResult | null;
+}) {
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState(content ? pretty(content) : "");
+  useEffect(() => { setDraft(content ? pretty(content) : ""); }, [content]);
+
+  const generating = busy === "cim:generate";
+
+  let cim: CimData | null = null;
+  if (content) {
+    try { cim = JSON.parse(content) as CimData; } catch { /* render edit mode si JSON inválido */ }
+  }
+
+  return (
+    <div className="bg-white border rounded-lg p-4 space-y-4">
+      {/* Cabecera */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="font-semibold">CIM — Requisitos formalizados</h2>
+          <StatusBadge status={status} />
+        </div>
+        {cim && !editMode && (
+          <button
+            onClick={() => setEditMode(true)}
+            className="text-xs text-gray-500 border rounded px-2 py-1 hover:bg-gray-50"
+          >
+            Editar JSON
+          </button>
+        )}
+        {editMode && (
+          <button
+            onClick={() => setEditMode(false)}
+            className="text-xs text-gray-500 border rounded px-2 py-1 hover:bg-gray-50"
+          >
+            ← Ver estructura
+          </button>
+        )}
+      </div>
+
+      {/* Sin contenido */}
+      {!content && (
+        <p className="text-sm text-gray-500">
+          Aún no generado. Genera el CIM a partir de los requisitos del chat.
+        </p>
+      )}
+
+      {/* Vista estructurada */}
+      {cim && !editMode && (
+        <div className="space-y-4">
+          {cim.domain && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Dominio</span>
+              <span className="text-sm bg-gray-100 text-gray-700 rounded-full px-3 py-0.5">{cim.domain}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Requisitos Funcionales */}
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  Requisitos Funcionales
+                  <span className="ml-1.5 text-blue-600 font-bold">{cim.functional_requirements?.length ?? 0}</span>
+                </h3>
+              </div>
+              {(cim.functional_requirements ?? []).length === 0 && (
+                <p className="text-xs text-gray-400 italic">Sin requisitos funcionales</p>
+              )}
+              <ul className="space-y-1.5">
+                {(cim.functional_requirements ?? []).map((fr) => (
+                  <li key={fr.id} className="flex items-start gap-2">
+                    <span className="shrink-0 text-xs bg-blue-100 text-blue-700 font-mono font-medium px-1.5 py-0.5 rounded mt-0.5">{fr.id}</span>
+                    <span className="text-xs text-gray-700 leading-snug">{fr.description}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Requisitos No Funcionales */}
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-purple-500 shrink-0" />
+                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  Requisitos No Funcionales
+                  <span className="ml-1.5 text-purple-600 font-bold">{cim.non_functional_requirements?.length ?? 0}</span>
+                </h3>
+              </div>
+              {(cim.non_functional_requirements ?? []).length === 0 && (
+                <p className="text-xs text-gray-400 italic">Sin requisitos no funcionales</p>
+              )}
+              <ul className="space-y-1.5">
+                {(cim.non_functional_requirements ?? []).map((nfr) => (
+                  <li key={nfr.id} className="flex items-start gap-2">
+                    <span className="shrink-0 text-xs bg-purple-100 text-purple-700 font-mono font-medium px-1.5 py-0.5 rounded mt-0.5">{nfr.id}</span>
+                    <div className="min-w-0">
+                      {nfr.category && (
+                        <span className="text-xs text-purple-500 font-medium mr-1">[{nfr.category}]</span>
+                      )}
+                      <span className="text-xs text-gray-700 leading-snug">{nfr.description}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Actores */}
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  Actores
+                  <span className="ml-1.5 text-green-600 font-bold">{cim.actors?.length ?? 0}</span>
+                </h3>
+              </div>
+              {(cim.actors ?? []).length === 0 && (
+                <p className="text-xs text-gray-400 italic">Sin actores</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {(cim.actors ?? []).map((actor) => (
+                  <div key={actor.name} className="group relative">
+                    <span className="inline-flex items-center gap-1 text-xs bg-green-50 border border-green-200 text-green-800 rounded-full px-2.5 py-1 cursor-default">
+                      <span>👤</span> {actor.name}
+                    </span>
+                    {actor.description && (
+                      <div className="absolute bottom-full left-0 mb-1 hidden group-hover:block z-10 bg-gray-800 text-white text-xs rounded px-2 py-1 w-48 leading-snug shadow-lg">
+                        {actor.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Casos de Uso */}
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  Casos de Uso
+                  <span className="ml-1.5 text-amber-600 font-bold">{cim.use_cases?.length ?? 0}</span>
+                </h3>
+              </div>
+              {(cim.use_cases ?? []).length === 0 && (
+                <p className="text-xs text-gray-400 italic">Sin casos de uso</p>
+              )}
+              <ul className="space-y-2">
+                {(cim.use_cases ?? []).map((uc) => (
+                  <li key={uc.name} className="flex items-start gap-2">
+                    <span className="shrink-0 text-amber-500 mt-0.5">◆</span>
+                    <div>
+                      <p className="text-xs font-medium text-gray-700">{uc.name}</p>
+                      {uc.actor && (
+                        <span className="inline-block text-xs bg-green-50 text-green-700 rounded-full px-1.5 py-0.5 mr-1">
+                          👤 {uc.actor}
+                        </span>
+                      )}
+                      {uc.description && (
+                        <p className="text-xs text-gray-500 leading-snug mt-0.5">{uc.description}</p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Editor JSON */}
+      {content && editMode && (
+        <textarea
+          className="w-full h-96 border rounded p-2 font-mono text-xs"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      )}
+
+      {/* Acciones */}
+      <div className="flex gap-2 flex-wrap">
+        <button
+          onClick={() => onAction("cim", "generate")}
+          disabled={generating}
+          className="bg-blue-600 text-white px-3 py-2 rounded text-sm disabled:opacity-50"
+        >
+          {generating ? "Generando…" : content ? "Regenerar" : "Generar"}
+        </button>
+        {content && editMode && (
+          <button
+            onClick={() => { onAction("cim", "edit", draft); setEditMode(false); }}
+            className="bg-gray-200 px-3 py-2 rounded text-sm"
+          >
+            Guardar edición
+          </button>
+        )}
+        {content && (
+          <>
+            <button
+              onClick={() => onAction("cim", "approve")}
+              className="bg-green-600 text-white px-3 py-2 rounded text-sm"
+            >
+              Aprobar →
+            </button>
+            <button
+              onClick={() => onAction("cim", "reject")}
+              className="bg-red-600 text-white px-3 py-2 rounded text-sm"
+            >
+              Rechazar
+            </button>
+          </>
+        )}
+      </div>
+
+      {aiCost && <AICostPanel aiCost={aiCost} />}
+    </div>
+  );
+}
+
 // -------------------- Panel genérico de modelo (CIM/PIM/PSM) --------------------
 function ModelPanel({
   title,
@@ -356,7 +656,7 @@ function ModelPanel({
   status,
   busy,
   onAction,
-  finops,
+  aiCost,
 }: {
   title: string;
   name: "cim" | "pim" | "psm";
@@ -364,7 +664,7 @@ function ModelPanel({
   status?: string;
   busy: string;
   onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
-  finops: FinOpsResult | null;
+  aiCost: AICostResult | null;
 }) {
   const [draft, setDraft] = useState(content ?? "");
   useEffect(() => {
@@ -426,7 +726,7 @@ function ModelPanel({
         )}
       </div>
 
-      {finops && <FinOpsPanel finops={finops} />}
+      {aiCost && <AICostPanel aiCost={aiCost} />}
     </div>
   );
 }
@@ -437,13 +737,13 @@ function CodePanel({
   status,
   busy,
   onAction,
-  finops,
+  aiCost,
 }: {
   files?: string;
   status?: string;
   busy: string;
   onAction: (n: "cim" | "pim" | "psm" | "code", a: string, c?: string) => void;
-  finops: FinOpsResult | null;
+  aiCost: AICostResult | null;
 }) {
   const [selected, setSelected] = useState<string>("");
   const tree: Record<string, string> = files ? JSON.parse(files) : {};
@@ -504,7 +804,7 @@ function CodePanel({
         )}
       </div>
 
-      {finops && <FinOpsPanel finops={finops} />}
+      {aiCost && <AICostPanel aiCost={aiCost} />}
     </div>
   );
 }
@@ -633,23 +933,10 @@ function AutoRunButton({
   );
 }
 
-// -------------------- FinOps Toast --------------------
-function FinOpsToast() {
-  return (
-    <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-white border border-gray-200 shadow-lg rounded-lg px-4 py-3 text-sm text-gray-700">
-      <svg className="animate-spin w-4 h-4 text-blue-500 shrink-0" viewBox="0 0 24 24" fill="none">
-        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-      </svg>
-      <div>
-        <p className="font-medium">Realizando análisis FinOps</p>
-        <p className="text-xs text-gray-400">Esto puede tardar unos segundos…</p>
-      </div>
-    </div>
-  );
-}
-
-// -------------------- FinOps Panel --------------------
+// -------------------- AI Cost Panel --------------------
+// Análisis FinOps por etapa: costo real de API + análisis generado por DeepSeek
+// (eficiencia, factores que impulsaron el costo, recomendaciones, proyección mensual).
+// Para la etapa Código (M2T sin IA) muestra un análisis estático con costo $0.
 const IMPACT_STYLE: Record<string, string> = {
   low: "bg-green-100 text-green-700",
   medium: "bg-yellow-100 text-yellow-700",
@@ -660,7 +947,197 @@ const PRIORITY_STYLE: Record<string, string> = {
   medium: "bg-orange-100 text-orange-700",
   high: "bg-red-100 text-red-700",
 };
+const IMPACT_LABEL: Record<string, string> = { low: "Bajo", medium: "Medio", high: "Alto" };
+const PRIORITY_LABEL: Record<string, string> = { low: "Baja", medium: "Media", high: "Alta" };
 
+function EfficiencyBar({ score, label }: { score: number; label: string }) {
+  const colors = ["", "bg-red-500", "bg-orange-500", "bg-yellow-500", "bg-green-400", "bg-green-600"];
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex gap-0.5">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <div
+            key={i}
+            className={`w-4 h-2 rounded-sm ${i <= score ? (colors[score] ?? "bg-blue-500") : "bg-gray-200"}`}
+          />
+        ))}
+      </div>
+      <span className="text-xs font-medium text-gray-600">{label}</span>
+    </div>
+  );
+}
+
+function AICostPanel({ aiCost }: { aiCost: AICostResult }) {
+  const noAI = aiCost.apiCalls === 0;
+
+  return (
+    <div className="mt-4 border-t pt-4 space-y-4">
+      {/* Título */}
+      <div className="flex items-center gap-2">
+        <span className="text-base select-none">💸</span>
+        <h3 className="font-semibold text-sm text-gray-800">Análisis FinOps — costo de IA en esta etapa</h3>
+      </div>
+
+      {/* Etapa sin IA */}
+      {noAI ? (
+        <>
+          <div className="flex items-center gap-2 bg-gray-50 border rounded-lg px-3 py-2 text-sm text-gray-600">
+            <span className="text-gray-400">⚡</span>
+            <span>{aiCost.note ?? "Transformación determinista: sin llamadas a la API de IA."}</span>
+            <span className="ml-auto font-bold text-gray-700">$0.00</span>
+          </div>
+          {aiCost.insight && (
+            <p className="text-xs text-gray-500 italic border-l-2 border-gray-200 pl-2">{aiCost.insight}</p>
+          )}
+        </>
+      ) : (
+        <>
+          {/* Fila 1: tokens + costo + eficiencia */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Tokens */}
+            <div className="border rounded-lg p-3 space-y-2">
+              <p className="text-xs text-gray-400 uppercase tracking-wide">Tokens utilizados</p>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Entrada</span>
+                  <span className="font-mono text-gray-700">{fmtTokens(aiCost.promptTokens)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Salida</span>
+                  <span className="font-mono text-gray-700">{fmtTokens(aiCost.completionTokens)}</span>
+                </div>
+                <div className="flex justify-between text-xs border-t pt-1 mt-1">
+                  <span className="font-medium text-gray-600">Total</span>
+                  <span className="font-mono font-semibold text-gray-800">{fmtTokens(aiCost.totalTokens)}</span>
+                </div>
+              </div>
+              {aiCost.apiCalls > 1 && (
+                <p className="text-xs text-amber-600 bg-amber-50 rounded px-2 py-0.5">
+                  {aiCost.apiCalls} llamadas (reintentos por validación)
+                </p>
+              )}
+            </div>
+
+            {/* Costo */}
+            <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex flex-col justify-between">
+              <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Costo de esta ejecución</p>
+              <p className="text-2xl font-bold text-blue-700">{fmtCost(aiCost.costUSD)}</p>
+              <div className="mt-2 space-y-0.5 text-xs text-gray-400">
+                <p>Modelo: <span className="text-gray-600">{aiCost.model}</span></p>
+                <p>${aiCost.priceInputPer1M}/1M entrada · ${aiCost.priceOutputPer1M}/1M salida</p>
+              </div>
+            </div>
+
+            {/* Proyección + eficiencia */}
+            <div className="border rounded-lg p-3 space-y-3">
+              <div>
+                <p className="text-xs text-gray-400 uppercase tracking-wide mb-1.5">Eficiencia</p>
+                <EfficiencyBar score={aiCost.efficiencyScore} label={aiCost.efficiencyLabel} />
+              </div>
+              {aiCost.monthlyProjection && (
+                <div>
+                  <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">
+                    Proyección mensual ({aiCost.monthlyProjection.runsPerMonth} ejecuciones)
+                  </p>
+                  <p className="text-lg font-bold text-gray-700">
+                    {fmtCost(aiCost.monthlyProjection.costUSD)}
+                    <span className="text-xs font-normal text-gray-400 ml-1">/ mes</span>
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Insight */}
+          {aiCost.insight && (
+            <p className="text-xs text-gray-600 italic border-l-2 border-blue-300 pl-3 bg-blue-50 py-2 rounded-r">
+              {aiCost.insight}
+            </p>
+          )}
+
+          {/* Factores que impulsaron el costo */}
+          {aiCost.costDrivers?.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                Factores que impulsaron el costo
+              </p>
+              <div className="space-y-1.5">
+                {aiCost.costDrivers.map((d, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${IMPACT_STYLE[d.impact] ?? IMPACT_STYLE.low}`}>
+                      {IMPACT_LABEL[d.impact] ?? d.impact}
+                    </span>
+                    <p className="text-xs text-gray-600">
+                      <span className="font-medium text-gray-700">{d.factor}:</span> {d.detail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Recomendaciones */}
+          {aiCost.recommendations?.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                Recomendaciones para reducir el costo
+              </p>
+              <div className="space-y-2">
+                {aiCost.recommendations.map((r, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${PRIORITY_STYLE[r.priority] ?? PRIORITY_STYLE.low}`}>
+                      {PRIORITY_LABEL[r.priority] ?? r.priority}
+                    </span>
+                    <div>
+                      <p className="text-xs font-medium text-gray-700">{r.title}</p>
+                      <p className="text-xs text-gray-500 leading-snug">{r.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// -------------------- FinOps Toasts --------------------
+// FinOpsToast: aparece mientras busy === "*:generate" en etapas con IA (CIM/PIM/PSM).
+// FinOpsDoneToast: aparece 5 s cuando la generación termina con éxito.
+function FinOpsToast() {
+  return (
+    <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-white border border-gray-200 shadow-lg rounded-lg px-4 py-3 text-sm text-gray-700">
+      <svg className="animate-spin w-4 h-4 text-blue-500 shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+      </svg>
+      <div>
+        <p className="font-medium">Calculando costo de IA…</p>
+        <p className="text-xs text-gray-400">Generando modelo con DeepSeek</p>
+      </div>
+    </div>
+  );
+}
+
+function FinOpsDoneToast({ stage }: { stage: string }) {
+  return (
+    <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-white border border-green-200 shadow-lg rounded-lg px-4 py-3 text-sm text-gray-700">
+      <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center shrink-0">
+        <svg className="w-3.5 h-3.5 text-green-600" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      </div>
+      <div>
+        <p className="font-medium text-gray-800">Análisis FinOps de fase <span className="text-blue-600">{stage}</span> completado</p>
+        <p className="text-xs text-gray-400">Tokens y costo disponibles en el panel</p>
+      </div>
+    </div>
+  );
+}
+
+// -------------------- FinOps Panel --------------------
 function FinOpsPanel({ finops }: { finops: FinOpsResult }) {
   return (
     <div className="mt-4 border-t pt-4 space-y-4">

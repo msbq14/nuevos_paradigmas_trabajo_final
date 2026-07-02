@@ -1,9 +1,13 @@
 // Helpers de la maquina de estados de etapas (PDF: avanzar solo si N esta approved).
+//
+// Nota FinOps: el análisis de costo de IA (storeAICost) se ejecuta dentro de
+// cada función generateXXX() del pipeline, al terminar la generación.
+// approveStage() ya no invoca FinOps: la aprobación es una operación de estado
+// pura, sin llamadas al LLM ni bloqueos adicionales.
 
 import { prisma } from "./prisma";
 import { generateCIM, generatePIM, generatePSM, generateCode } from "./pipeline";
 import { validateModel, type ValidationResult } from "./validate";
-import { generateFinOps } from "./finops";
 
 export type StageName = "cim" | "pim" | "psm" | "code";
 
@@ -52,14 +56,11 @@ async function setStatus(
 
 export async function approveStage(stage: StageName, projectId: string) {
   await setStatus(stage, projectId, "approved", new Date());
-  // Desbloquea la siguiente etapa.
   const next = STAGE_NUMBER[stage] + 1;
   await prisma.project.update({
     where: { id: projectId },
     data: { currentStage: next },
   });
-  // Genera el análisis FinOps; se awaita para que esté disponible al recargar el estado.
-  await generateFinOps(stage, projectId);
 }
 
 export async function rejectStage(stage: StageName, projectId: string) {

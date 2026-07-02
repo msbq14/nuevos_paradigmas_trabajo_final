@@ -1,9 +1,24 @@
 // Cliente DeepSeek reutilizable (PDF: Persona 1 - lib/deepseek.ts).
 // DeepSeek es compatible con la API de OpenAI, asi que usamos fetch directo.
+//
+// Cambio FinOps: callDeepSeek y callDeepSeekJSON ahora devuelven el campo
+// `usage` de la respuesta (prompt_tokens / completion_tokens / total_tokens).
+// El pipeline los acumula para calcular el costo real de IA por etapa sin
+// necesitar una llamada extra al LLM.
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+};
+
+/**
+ * Tokens consumidos en una llamada a DeepSeek, tal como los reporta la API.
+ * Se usa en el módulo FinOps para calcular el costo real de cada etapa.
+ */
+export type TokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 };
 
 const BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
@@ -12,16 +27,17 @@ const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
 export class DeepSeekError extends Error {}
 
 /**
- * Llama a DeepSeek y devuelve el texto de la respuesta (sin streaming).
- * @param messages historial de conversacion
+ * Llama a DeepSeek y devuelve el texto de la respuesta junto con el uso de tokens.
+ * @param messages   historial de conversacion
  * @param systemPrompt prompt de sistema (rol del modelo)
- * @param opts.json fuerza salida JSON (response_format json_object)
+ * @param opts.json  fuerza salida JSON (response_format json_object)
+ * @returns `content` con el texto generado y `usage` con los tokens consumidos
  */
 export async function callDeepSeek(
   messages: ChatMessage[],
   systemPrompt: string,
   opts: { json?: boolean; temperature?: number } = {}
-): Promise<string> {
+): Promise<{ content: string; usage: TokenUsage }> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey || apiKey === "pon-aqui-tu-api-key") {
     throw new DeepSeekError(
@@ -65,22 +81,29 @@ export async function callDeepSeek(
   if (typeof content !== "string") {
     throw new DeepSeekError("Respuesta de DeepSeek sin contenido de texto.");
   }
-  return content;
+  const usage: TokenUsage = {
+    promptTokens: data?.usage?.prompt_tokens ?? 0,
+    completionTokens: data?.usage?.completion_tokens ?? 0,
+    totalTokens: data?.usage?.total_tokens ?? 0,
+  };
+  return { content, usage };
 }
 
 /**
- * Llama a DeepSeek esperando JSON. Limpia fences ```json y parsea.
+ * Llama a DeepSeek esperando JSON estructurado.
+ * Limpia fences ```json, parsea el resultado y devuelve también el uso de tokens
+ * para que el pipeline pueda acumular el costo de IA por etapa.
  */
 export async function callDeepSeekJSON<T = unknown>(
   messages: ChatMessage[],
   systemPrompt: string,
   opts: { temperature?: number } = {}
-): Promise<T> {
-  const raw = await callDeepSeek(messages, systemPrompt, {
+): Promise<{ data: T; usage: TokenUsage }> {
+  const { content, usage } = await callDeepSeek(messages, systemPrompt, {
     json: true,
     temperature: opts.temperature,
   });
-  return parseJsonLoose<T>(raw);
+  return { data: parseJsonLoose<T>(content), usage };
 }
 
 /** Parsea JSON tolerando fences de markdown y texto alrededor. */
